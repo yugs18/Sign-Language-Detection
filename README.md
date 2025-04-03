@@ -1,7 +1,7 @@
 # Sign Language Recognition
 
 ## Overview
-This project implements a real-time American Sign Language (ASL) recognition system using computer vision and deep learning. The system can detect and interpret hand gestures representing numbers (1-9) and letters (A-Z) of the alphabet.
+This project implements a real-time Indian Sign Language (ISL) recognition system using computer vision and deep learning. The system can detect and interpret hand gestures representing numbers (1-9) and letters (A-Z) of the alphabet.
 
 ## Key Features
 - Real-time sign language detection using webcam
