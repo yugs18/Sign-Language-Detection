@@ -7,12 +7,22 @@ import time
 from collections import Counter
 from autocorrect import Speller
 import webbrowser
+import streamlit as st
 import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
 import threading
 import queue
 import os
+import requests
+
+# Bing Search API Configuration (replace with your own API key)
+BING_API_KEY = st.secrets["BING_API_KEY"]
+BING_ENDPOINT = "https://api.bing.microsoft.com/v7.0/search"
+
+# LanguageTool API endpoint (free public endpoint)
+LANG_TOOL_ENDPOINT = "https://api.languagetool.org/v2/check"
+
 
 # Register custom function for model loading
 @tf.keras.utils.register_keras_serializable()
@@ -36,7 +46,7 @@ class SignLanguageApp:
         self.current_sentence = ""
         self.last_letter_time = time.time()
         self.no_prediction_count = 0
-        self.space_threshold = 2  # 2 seconds of no prediction means space
+        self.space_threshold = 5  # 5 seconds of no prediction means space
         self.speller = Speller()
         self.current_word = ""
         self.spelling_suggestions = []
@@ -149,7 +159,7 @@ class SignLanguageApp:
         video_container = tk.Frame(content_frame, bg="#f0f0f0")
         video_container.pack(side=tk.LEFT, padx=5)
         
-        self.video_frame = tk.Label(video_container, bg="black", width=640, height=350)
+        self.video_frame = tk.Label(video_container, bg="black", width=640, height=480)
         self.video_frame.pack()
         
         # Control panel on right side
@@ -165,6 +175,11 @@ class SignLanguageApp:
                                        font=("Arial", 12, "bold"), bg="#f0f0f0", 
                                        fg="green", height=2)
         self.prediction_label.pack(fill=tk.X, padx=5)
+
+        # After creating prediction_label, add:
+        self.accuracy_label = tk.Label(prediction_frame, text="Accuracy: N/A", 
+                                        font=("Arial", 10, "bold"), bg="#f0f0f0", fg="blue")
+        self.accuracy_label.pack(fill=tk.X, padx=5, pady=2)
         
         # Control buttons
         buttons_frame = tk.LabelFrame(control_panel, text="Controls", 
@@ -217,6 +232,14 @@ class SignLanguageApp:
         self.sentence_display = tk.Text(sentence_frame, height=3, font=("Arial", 12),
                                        wrap=tk.WORD, bd=2, relief=tk.GROOVE)
         self.sentence_display.pack(fill=tk.X, pady=5, padx=5, expand=True)
+
+        # Dictionary Definition Frame in input tab
+        definition_frame = tk.LabelFrame(input_tab, text="Dictionary Definition", 
+                                        font=("Arial", 10, "bold"), bg="#f0f0f0")
+        definition_frame.pack(pady=5, fill=tk.X)
+        self.definition_display = tk.Text(definition_frame, height=2, font=("Arial", 12), 
+                                        wrap=tk.WORD, bd=2, relief=tk.GROOVE)
+        self.definition_display.pack(fill=tk.X, pady=5, padx=5)
         
         # Tab 2: Search
         search_tab = tk.Frame(notebook, bg="#f0f0f0")
@@ -239,6 +262,14 @@ class SignLanguageApp:
                                 command=self.perform_search, bg="#2196F3", fg="white", 
                                 width=10)
         search_button.pack(side=tk.LEFT, padx=5)
+
+        # Bing Search Results Display
+        results_frame = tk.Frame(search_tab, bg="#f0f0f0", pady=10)
+        results_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        tk.Label(results_frame, text="Bing Search Results:", font=("Arial", 12), bg="#f0f0f0").pack(anchor=tk.W, padx=5)
+        self.search_results_display = tk.Text(results_frame, height=5, font=("Arial", 12), wrap=tk.WORD, bd=2, relief=tk.GROOVE)
+        self.search_results_display.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.search_results_display.config(state=tk.DISABLED)
         
         # Tab 3: Instructions
         help_tab = tk.Frame(notebook, bg="#f0f0f0")
@@ -246,12 +277,12 @@ class SignLanguageApp:
         
         # Instructions
         instructions = """Instructions:
-1. Press 'c' to toggle camera on/off
-2. Make sign language gestures to form words
-3. Wait 2 seconds without gestures to add a space
-4. Press Enter or click Search to search Google
-5. You can also type directly in the search bar
-6. Press 'q' to quit the application"""
+                        1. Press 'c' to toggle camera on/off
+                        2. Make sign language gestures to form words
+                        3. Wait 2 seconds without gestures to add a space
+                        4. Press Enter or click Search to search Google
+                        5. You can also type directly in the search bar
+                        6. Press 'q' to quit the application"""
         
         tk.Label(help_tab, text=instructions, font=("Arial", 11), 
                 bg="#f0f0f0", justify=tk.LEFT).pack(pady=10, padx=10, fill=tk.BOTH)
@@ -334,12 +365,16 @@ class SignLanguageApp:
                             pred_class = np.argmax(pred_prob, axis=1)[0]
                             current_prediction = self.idx2label.get(pred_class, "Unknown")
                             
-                            # Append prediction to the buffer
+                            # Compute accuracy from prediction probability
+                            accuracy = np.max(pred_prob) * 100
+                            # Update accuracy label on the UI
+                            self.root.after(0, lambda acc=accuracy: self.accuracy_label.config(text=f"Accuracy: {acc:.2f}%"))
+                            
+                            # Append prediction to the buffer for smoothing
                             self.prediction_buffer.append(current_prediction)
                             if len(self.prediction_buffer) > self.window_size:
                                 self.prediction_buffer.pop(0)
                             
-                            # Compute majority vote over the buffer for smoothing
                             if self.prediction_buffer:
                                 predicted_label = Counter(self.prediction_buffer).most_common(1)[0][0]
                                 self.no_prediction_count = 0
@@ -353,13 +388,14 @@ class SignLanguageApp:
                     else:
                         predicted_label = "Model not loaded"
                         self.no_prediction_count += 1
+
                 
                 # Update prediction label (using after method to ensure thread safety)
                 self.root.after(0, lambda label=predicted_label: self.update_prediction(label))
                 
                 # Check if we need to add a letter or space
                 current_time = time.time()
-                if current_time - self.last_letter_time >= 1 and predicted_label not in ["No Hand Detected", "Unknown", "Model not loaded", "Prediction Error"]:
+                if current_time - self.last_letter_time >= 2 and predicted_label not in ["No Hand Detected", "Unknown", "Model not loaded", "Prediction Error"]:
                     # Add letter to current word
                     self.current_word += predicted_label
                     self.last_letter_time = current_time
@@ -372,14 +408,15 @@ class SignLanguageApp:
                 # Check for space (no prediction for space_threshold seconds)
                 if self.no_prediction_count >= self.space_threshold * 30:  # Assuming ~30 fps
                     if self.current_word:
-                        # Add the word to the sentence
-                        if self.spelling_suggestions and self.spelling_suggestions[0] != self.current_word:
-                            # Use the first suggestion if available
-                            self.current_sentence += self.spelling_suggestions[0] + " "
-                        else:
-                            # Otherwise use the current word
-                            self.current_sentence += self.current_word + " "
-                            
+                        # Use the first suggestion if available, otherwise the current word
+                        final_word = self.spelling_suggestions[0] if self.spelling_suggestions and self.spelling_suggestions[0] != self.current_word else self.current_word
+                        self.current_sentence += final_word + " "
+                        
+                        # Fetch dictionary definition and update the UI
+                        definition = self.get_definition(final_word)
+                        self.root.after(0, lambda defn=definition: (self.definition_display.delete(1.0, tk.END),
+                                                                      self.definition_display.insert(tk.END, defn)))
+                        
                         self.current_word = ""
                         self.spelling_suggestions = []
                         self.no_prediction_count = 0
@@ -477,7 +514,61 @@ class SignLanguageApp:
         except Exception as e:
             print(f"Error generating spelling suggestions: {e}")
             self.spelling_suggestions = []
+
+    def get_definition(self, word):
+        """Fetch dictionary definition for a given word using the free dictionary API."""
+        try:
+            url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
+            response = requests.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                meanings = data[0].get("meanings", [])
+                if meanings:
+                    definitions = meanings[0].get("definitions", [])
+                    if definitions:
+                        return definitions[0].get("definition", "No definition found.")
+            return "Definition not available."
+        except Exception as e:
+            return f"Error: {e}"
+
+    def perform_bing_search(self, query):
+        """Perform a Bing search using the Bing Search API and return a snippet."""
+        headers = {"Ocp-Apim-Subscription-Key": BING_API_KEY}
+        params = {"q": query, "textDecorations": True, "textFormat": "HTML"}
+        try:
+            response = requests.get(BING_ENDPOINT, headers=headers, params=params)
+            data = response.json()
+            if "webPages" in data and "value" in data["webPages"]:
+                first_result = data["webPages"]["value"][0]
+                snippet = first_result.get("snippet", "No snippet available.")
+                return snippet
+            else:
+                return "No results found."
+        except Exception as e:
+            return f"Search error: {e}"
     
+    def grammar_check(self, text):
+        """Check and correct grammar using the LanguageTool API."""
+        try:
+            data = {
+                "text": text,
+                "language": "en-US"
+            }
+            response = requests.post(LANG_TOOL_ENDPOINT, data=data)
+            result = response.json()
+            # Apply corrections – a simple implementation (more advanced merging might be needed)
+            if "matches" in result:
+                matches = sorted(result["matches"], key=lambda x: x["offset"], reverse=True)
+                for match in matches:
+                    if match.get("replacements"):
+                        replacement = match["replacements"][0]["value"]
+                        offset = match["offset"]
+                        length = match["length"]
+                        text = text[:offset] + replacement + text[offset+length:]
+            return text
+        except Exception as e:
+            return text
+
     def update_prediction(self, label):
         self.prediction_label.config(text=label)
     
@@ -503,22 +594,31 @@ class SignLanguageApp:
     def perform_search(self):
         search_query = self.search_var.get().strip()
         if search_query:
-            try:
-                # Format the query for Google search
-                formatted_query = search_query.replace(' ', '+')
-                search_url = f"https://www.google.com/search?q={formatted_query}"
-                
-                # Open in default browser
-                webbrowser.open(search_url)
-                
-                # Clear the current word and update sentence
-                if self.current_word:
-                    self.current_sentence += self.current_word + " "
-                    self.current_word = ""
-                    self.spelling_suggestions = []
-                    self.update_displays()
-            except Exception as e:
-                messagebox.showerror("Search Error", f"Error performing search: {e}")
+            # Use Bing Search API to get a snippet
+            snippet = self.perform_bing_search(search_query)
+            # Update Bing search results display
+            self.search_results_display.config(state=tk.NORMAL)
+            self.search_results_display.delete(1.0, tk.END)
+            self.search_results_display.insert(tk.END, snippet)
+            self.search_results_display.config(state=tk.DISABLED)
+            
+            # Use LanguageTool to grammar-check the complete sentence
+            full_text = self.current_sentence + self.current_word
+            corrected_sentence = self.grammar_check(full_text)
+            # Update sentence display with the corrected sentence
+            self.sentence_display.delete(1.0, tk.END)
+            self.sentence_display.insert(tk.END, corrected_sentence)
+            
+            # Optionally open the Bing search in the browser
+            formatted_query = search_query.replace(' ', '+')
+            webbrowser.open(f"https://www.bing.com/search?q={formatted_query}")
+            
+            # Clear the current word and update sentence if needed
+            if self.current_word:
+                self.current_sentence += self.current_word + " "
+                self.current_word = ""
+                self.spelling_suggestions = []
+                self.update_displays()
     
     def normalize_keypoints(self, body, hands_kps):
         """

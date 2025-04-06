@@ -1,2 +1,5 @@
 dataset/
 dataset.npz
+.streamlit/
+sign-language-detection-complete-documentation.md
+doc-images/

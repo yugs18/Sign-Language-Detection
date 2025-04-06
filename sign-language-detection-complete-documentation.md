@@ -154,7 +154,7 @@ The script creates a directory structure as follows:
 ```
 Each subdirectory contains approximately 1,000 images of the corresponding sign language gesture.
 
-!![Original Images](../doc-images\Picture1.png)
+!![Original Images](doc-images\Picture1.png)
 
 ## Step 2: Data Preprocessing
 
@@ -232,7 +232,7 @@ Each subdirectory contains augmented versions of the original sign language gest
 - Reduces overfitting by introducing variations of the same gesture
 - Enhances model robustness to different hand positions, lighting conditions, and angles
 
-![Augmentated Images](../doc-images\Picture2.png)
+![Augmentated Images](doc-images\Picture2.png)
 
 ### 2.2: Generating Keypoints
 
